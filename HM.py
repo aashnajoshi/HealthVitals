@@ -10,7 +10,7 @@ def initialize_sensors():
     hx711 = wt(dout_pin=23, pd_sck_pin=24)
     hx711.set_scale_ratio(-7050)
     hx711.reset()
-    max30102 = heart()
+    heart()
 
 
 def measure_weight():
