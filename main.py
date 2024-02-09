@@ -10,6 +10,7 @@ from max30100 import MAX30100 as mx30
 I2C_ADDR = 0x27
 I2C_NUM_ROWS = 2
 I2C_NUM_COLS = 16
+
 TRIG_PIN = 23
 ECHO_PIN = 24
 
