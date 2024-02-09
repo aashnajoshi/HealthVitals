@@ -5,97 +5,30 @@ from lcd_api import LcdApi
 from i2c_lcd import I2cLcd
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
-from max30100 import MAX30100
+from max30100 import MAX30100 as mx30
 
 I2C_ADDR = 0x27
 I2C_NUM_ROWS = 2
 I2C_NUM_COLS = 16
-
-lcd = I2cLcd(1, I2C_ADDR, I2C_NUM_ROWS, I2C_NUM_COLS)
-
-
 TRIG_PIN = 23
 ECHO_PIN = 24
-LM35_PIN = 18  # GPIO pin for LM35 sensor
+
+LM35_PIN = 18
 BUZZER_PIN = 8
 
-# Initialize MAX30100 sensor
-mx30 = MAX30100()
-mx30.enable_spo2()
-mx30.enable_leds()
-
+lcd = I2cLcd(1, I2C_ADDR, I2C_NUM_ROWS, I2C_NUM_COLS)
 ser_gsm = serial.Serial(
     "/dev/serial0", 9600, timeout=1
-)  # GSM module (replace with the correct port)
-
+)  # GSM module (replace correct port)
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(TRIG_PIN, GPIO.OUT)
 GPIO.setup(ECHO_PIN, GPIO.IN)
-GPIO.setup(LM35_PIN, GPIO.IN)
 
 
 def beep():
     GPIO.output(BUZZER_PIN, GPIO.HIGH)
     time.sleep(0.5)
     GPIO.output(BUZZER_PIN, GPIO.LOW)
-
-
-def collect_api(phone_number, height, temperature):
-    SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-    SERVICE_ACCOUNT_FILE = "keyams.json"
-    creds = None
-    creds = service_account.Credentials.from_service_account_file(
-        SERVICE_ACCOUNT_FILE, scopes=SCOPES
-    )
-    # The ID and range of a sample spreadsheet.
-    SAMPLE_SPREADSHEET_ID = "1BUcmZ3LW3yrNbD0ooPvdXrh0FFD7nu6gFjp1OQ_RPqU"
-    SAMPLE_RANGE_NAME = "smsapi!A2:E"
-    service = build("sheets", "v4", credentials=creds)
-    # Call the Sheets API
-    sheet = service.spreadsheets()
-    result = (
-        sheet.values()
-        .get(spreadsheetId=SAMPLE_SPREADSHEET_ID, range=SAMPLE_RANGE_NAME)
-        .execute()
-    )
-    values = result.get("values", [])
-    phone_number = "{0}".format(phone_number)
-    height = "{0}".format(height)
-    temperature = "{0}".format(temperature)
-
-    api_sms = [phone_number, height, temperature]
-    print(api_sms)
-    sms_values = []
-    sms_values.append(api_sms)
-    print(sms_values)
-
-    request = (
-        service.spreadsheets()
-        .values()
-        .append(
-            spreadsheetId=SAMPLE_SPREADSHEET_ID,
-            range="Sheet2!A3",
-            valueInputOption="USER_ENTERED",
-            body={"values": sms_values},
-        )
-        .execute()
-    )
-
-
-def send_sms(phone_number, message):
-    ser = ser_gsm
-    ser.write(b'AT+CPIN="YOUR_PIN"\r\n')
-    ser.write(b"AT+CMGF=1\r\n")
-    time.sleep(1)
-
-    # Send SMS
-    ser.write(b'AT+CMGS="' + phone_number.encode() + b'"\r\n')
-    time.sleep(1)
-    ser.write(message.encode() + b"\x1A")
-    time.sleep(1)
-
-    # Close the serial connection
-    ser.close()
 
 
 def measure_height():
@@ -118,25 +51,97 @@ def measure_height():
     return height
 
 
-def read_pulse_oximeter():
-    red, ir = mx30.read_sequential()
-    heart_rate = mx30.calculate_heart_rate(ir)
-    spo2 = mx30.calculate_spo2(ir, red)
-    beep()
-    return heart_rate, spo2
-
-
 def measure_weight():
     beep()
     return 0
 
 
+def read_pulse_oximeter():
+    mx30.enable_spo2()
+    mx30.enable_leds()
+
+    pulse_threshold = 80  # bpm
+    o2_threshold = 95  # %
+
+    while True:
+        mx30.read_sensor()
+        stress_level(pulse_threshold, o2_threshold)
+        print("Pulse Rate: {} bpm".format(mx30.ir))
+        print("Oxygen Saturation: {}%".format(mx30.red))
+        print("Stress Level: {}".format(stress_level))
+        time.sleep(1)
+
+
+def stress_level(pulse_threshold, o2_threshold):
+    if mx30.ir <= pulse_threshold and mx30.red >= o2_threshold:
+        stress_level = "Normal"
+    elif mx30.ir > pulse_threshold and mx30.red < o2_threshold:
+        stress_level = "High"
+    else:
+        stress_level = "Moderate"
+
+
 def measure_temperature():
     # LM35 sensor returns analog voltage proportional to temperature
+    GPIO.setup(LM35_PIN, GPIO.IN)
     analog_value = GPIO.input(LM35_PIN)
     temperature = (analog_value / 1024.0) * 3300 / 10  # LM35 scaling formula
     beep()
     return temperature
+
+
+def send_sms(phone_number, message):
+    ser = ser_gsm
+    ser.write(b'AT+CPIN="YOUR_PIN"\r\n')
+    ser.write(b"AT+CMGF=1\r\n")
+    time.sleep(1)
+    ser.write(b'AT+CMGS="' + phone_number.encode() + b'"\r\n')
+    time.sleep(1)
+    ser.write(message.encode() + b"\x1A")
+    time.sleep(1)
+    ser.close()
+
+
+def collect_api(phone_number, height, weight, pulse, o2, temperature):
+    SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+    SERVICE_ACCOUNT_FILE = "keyams.json"
+    creds = None
+    creds = service_account.Credentials.from_service_account_file(
+        SERVICE_ACCOUNT_FILE, scopes=SCOPES
+    )
+    # The ID and range of a sample spreadsheet.
+    SAMPLE_SPREADSHEET_ID = "1BUcmZ3LW3yrNbD0ooPvdXrh0FFD7nu6gFjp1OQ_RPqU"
+    SAMPLE_RANGE_NAME = "smsapi!A2:E"
+    service = build("sheets", "v4", credentials=creds)
+    # Call for Sheets API
+    sheet = service.spreadsheets()
+    result = (
+        sheet.values()
+        .get(spreadsheetId=SAMPLE_SPREADSHEET_ID, range=SAMPLE_RANGE_NAME)
+        .execute()
+    )
+    values = result.get("values", [])
+    phone_number = "{0}".format(phone_number)
+    height = "{0}".format(height)
+    temperature = "{0}".format(temperature)
+
+    api_sms = [phone_number, height, weight, pulse, o2, temperature]
+    print(api_sms)
+    sms_values = []
+    sms_values.append(api_sms)
+    print(sms_values)
+
+    request = (
+        service.spreadsheets()
+        .values()
+        .append(
+            spreadsheetId=SAMPLE_SPREADSHEET_ID,
+            range="Sheet2!A3",
+            valueInputOption="USER_ENTERED",
+            body={"values": sms_values},
+        )
+        .execute()
+    )
 
 
 def collect_and_send_sms(phone_number):
@@ -146,17 +151,16 @@ def collect_and_send_sms(phone_number):
     bmi = weight / ((height / 100) ** 2)
     temperature = measure_temperature()
     pulse = read_pulse_oximeter()
-
     time.sleep(1)
     height = 200 - height
     print(height)
     print(temperature)
 
-    sms_message = f"Thanks for giving time for you health, Here's your Report:\n Height: {height} cm\nWeight: {weight} kg\nBMI: {bmi:.2f}\nPulse: {pulse.heart_rate} bpm\nOxygen Level: {pulse.spo2}%cm\nTemperature: {temperature:.2f} °C"
+    sms_message = f"We appreciate you taking the time to consider your health. Your report:\n Height: {height} cm\nWeight: {weight} kg\nBMI: {bmi:.2f}\nPulse: {pulse.heart_rate} bpm\nOxygen Level: {pulse.spo2}%cm\nTemperature: {temperature:.2f} °C"
 
     send_sms(phone_number, sms_message)
     beep()
-    collect_api(phone_number, height, temperature)
+    collect_api(phone_number, height, weight, pulse.heart_rate, pulse.spo2, temperature)
     beep()
     lcd.clear()
 
@@ -169,7 +173,7 @@ while True:
     if phone_number.lower() == "exit":
         break
     if len(phone_number) == 10 and phone_number.isdigit():
-        print("Thank you! You can now proceed inside the model.")
+        print("Thank you! You can now proceed inside.")
         lcd.putstr(phone_number + "      You May Proceed")
         collect_and_send_sms(phone_number)
         print("Thank you! Your report is ready and is sent to your phone number.")
@@ -179,8 +183,6 @@ while True:
         lcd.putstr("Invalid Number")
         print("Invalid phone number. Please enter a 10-digit numeric phone number.")
         time.sleep(1.5)
-
         lcd.clear()
-
 
 GPIO.cleanup()
