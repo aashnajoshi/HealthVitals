@@ -1,51 +1,37 @@
-import RPi.GPIO as GPIO
+import serial
 import time
-from RPLCD import CharLCD
+import RPi.GPIO as GPIO
+from lcd_api import LcdApi
+from i2c_lcd import I2cLcd
+from googleapiclient.discovery import build
+from google.oauth2 import service_account
 from max30100 import MAX30100
 
-# Set up GPIO
-ULTRASONIC_TRIGGER_PIN = 23
-ULTRASONIC_ECHO_PIN = 24
-BUZZER_PIN = 18
-GPIO.setmode(GPIO.BCM)
-GPIO.setup(ULTRASONIC_TRIGGER_PIN, GPIO.OUT)
-GPIO.setup(ULTRASONIC_ECHO_PIN, GPIO.IN)
-GPIO.setup(BUZZER_PIN, GPIO.OUT)
+I2C_ADDR = 0x27
+I2C_NUM_ROWS = 2
+I2C_NUM_COLS = 16
 
-# Initialize LCD
-lcd = CharLCD(cols=16, rows=2, pin_rs=37, pin_e=35, pins_data=[33, 31, 29, 23])
+lcd = I2cLcd(1, I2C_ADDR, I2C_NUM_ROWS, I2C_NUM_COLS)
+
+
+TRIG_PIN = 23
+ECHO_PIN = 24
+LM35_PIN = 18  # GPIO pin for LM35 sensor
+BUZZER_PIN = 8
 
 # Initialize MAX30100 sensor
 mx30 = MAX30100()
 mx30.enable_spo2()
 mx30.enable_leds()
 
+ser_gsm = serial.Serial(
+    "/dev/serial0", 9600, timeout=1
+)  # GSM module (replace with the correct port)
 
-def measure_distance():
-    # Trigger ultrasonic sensor
-    GPIO.output(ULTRASONIC_TRIGGER_PIN, True)
-    time.sleep(0.00001)
-    GPIO.output(ULTRASONIC_TRIGGER_PIN, False)
-
-    # Wait for echo
-    pulse_start = time.time()
-    pulse_end = time.time()
-    while GPIO.input(ULTRASONIC_ECHO_PIN) == 0:
-        pulse_start = time.time()
-    while GPIO.input(ULTRASONIC_ECHO_PIN) == 1:
-        pulse_end = time.time()
-
-    # Calculate distance from time difference
-    pulse_duration = pulse_end - pulse_start
-    distance_cm = pulse_duration * 17150
-    return distance_cm
-
-
-def read_pulse_oximeter():
-    red, ir = mx30.read_sequential()
-    heart_rate = mx30.calculate_heart_rate(ir)
-    spo2 = mx30.calculate_spo2(ir, red)
-    return heart_rate, spo2
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(TRIG_PIN, GPIO.OUT)
+GPIO.setup(ECHO_PIN, GPIO.IN)
+GPIO.setup(LM35_PIN, GPIO.IN)
 
 
 def beep():
@@ -54,84 +40,147 @@ def beep():
     GPIO.output(BUZZER_PIN, GPIO.LOW)
 
 
-def display_on_lcd(line1, line2):
-    lcd.clear()
-    lcd.write_string(line1)
-    lcd.crlf()
-    lcd.write_string(line2)
+def collect_api(phone_number, height, temperature):
+    SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+    SERVICE_ACCOUNT_FILE = "keyams.json"
+    creds = None
+    creds = service_account.Credentials.from_service_account_file(
+        SERVICE_ACCOUNT_FILE, scopes=SCOPES
+    )
+    # The ID and range of a sample spreadsheet.
+    SAMPLE_SPREADSHEET_ID = "1BUcmZ3LW3yrNbD0ooPvdXrh0FFD7nu6gFjp1OQ_RPqU"
+    SAMPLE_RANGE_NAME = "smsapi!A2:E"
+    service = build("sheets", "v4", credentials=creds)
+    # Call the Sheets API
+    sheet = service.spreadsheets()
+    result = (
+        sheet.values()
+        .get(spreadsheetId=SAMPLE_SPREADSHEET_ID, range=SAMPLE_RANGE_NAME)
+        .execute()
+    )
+    values = result.get("values", [])
+    phone_number = "{0}".format(phone_number)
+    height = "{0}".format(height)
+    temperature = "{0}".format(temperature)
+
+    api_sms = [phone_number, height, temperature]
+    print(api_sms)
+    sms_values = []
+    sms_values.append(api_sms)
+    print(sms_values)
+
+    request = (
+        service.spreadsheets()
+        .values()
+        .append(
+            spreadsheetId=SAMPLE_SPREADSHEET_ID,
+            range="Sheet2!A3",
+            valueInputOption="USER_ENTERED",
+            body={"values": sms_values},
+        )
+        .execute()
+    )
 
 
-def calibrate():
-    # Measure the initial distance when there's no weight on the springs
-    no_weight_distance = measure_distance()
-    display_on_lcd("Calibration", "completed")
-    time.sleep(2)
-    return no_weight_distance
+def send_sms(phone_number, message):
+    ser = ser_gsm
+    ser.write(b'AT+CPIN="YOUR_PIN"\r\n')
+    ser.write(b"AT+CMGF=1\r\n")
+    time.sleep(1)
+
+    # Send SMS
+    ser.write(b'AT+CMGS="' + phone_number.encode() + b'"\r\n')
+    time.sleep(1)
+    ser.write(message.encode() + b"\x1A")
+    time.sleep(1)
+
+    # Close the serial connection
+    ser.close()
 
 
-def measure_weight(no_weight_distance):
-    # Measure the current distance
-    current_distance = measure_distance()
+def measure_height():
+    GPIO.output(TRIG_PIN, True)
+    time.sleep(0.00001)
+    GPIO.output(TRIG_PIN, False)
 
-    # Calculate the difference between the current distance and no weight distance
-    distance_difference = no_weight_distance - current_distance
+    pulse_start = time.time()
+    pulse_end = time.time()
+    while GPIO.input(ECHO_PIN) == 0:
+        pulse_start = time.time()
+    while GPIO.input(ECHO_PIN) == 1:
+        pulse_end = time.time()
+    pulse_duration = pulse_end - pulse_start
 
-    # Assuming a linear relationship between distance and weight, apply calibration factor
-    # Adjust the calibration_factor based on your actual measurements and calibration
-    reference_weight = 0  # Adjust this based on your setup
-    calibration_factor = reference_weight / no_weight_distance
-    weight = distance_difference * calibration_factor
-
-    return weight
-
-
-try:
-    # Calibrate the system
-    no_weight_distance = calibrate()
-
-    # Main program
-    phone_number = input("Enter your phone number: ")
-    display_on_lcd("Phone Number:", phone_number)
+    # height = pulse_duration * 0.343  # Speed of sound in cm/s
+    height = pulse_duration * (34300 / 2)
+    print(height)
     beep()
-    time.sleep(2)
+    return height
 
-    # Sanitizing at entry
-    display_on_lcd("Sanitizing...", "")
+
+def read_pulse_oximeter():
+    red, ir = mx30.read_sequential()
+    heart_rate = mx30.calculate_heart_rate(ir)
+    spo2 = mx30.calculate_spo2(ir, red)
     beep()
-    time.sleep(2)
+    return heart_rate, spo2
 
-    # Enter the system
-    display_on_lcd("Enter the", "system")
+
+def measure_weight():
     beep()
-    time.sleep(2)
+    return 0
 
-    # Measure height
-    display_on_lcd("Measuring", "height...")
-    height = measure_distance()  # Assuming ultrasonic measures height
+
+def measure_temperature():
+    # LM35 sensor returns analog voltage proportional to temperature
+    analog_value = GPIO.input(LM35_PIN)
+    temperature = (analog_value / 1024.0) * 3300 / 10  # LM35 scaling formula
     beep()
-    time.sleep(2)
+    return temperature
 
-    # Measure weight
-    display_on_lcd("Measuring", "weight...")
-    weight = measure_weight(no_weight_distance)
-    beep()
-    time.sleep(2)
 
-    # Measure pulse and oxygen level
-    display_on_lcd("Measuring", "pulse & oxygen...")
-    heart_rate, spo2 = read_pulse_oximeter()
-    beep()
-    time.sleep(2)
-
-    # Calculate BMI
+def collect_and_send_sms(phone_number):
+    phone_number = phone_number
+    height = measure_height()
+    weight = measure_weight()
     bmi = weight / ((height / 100) ** 2)
+    temperature = measure_temperature()
+    pulse = read_pulse_oximeter()
 
-    # Send message containing all data to the user
-    message = f"Height: {height} cm\nWeight: {weight} kg\nBMI: {bmi:.2f}\nPulse: {heart_rate} bpm\nOxygen Level: {spo2}%"
-    print("Message sent to user:")
-    print(message)
+    time.sleep(1)
+    height = 200 - height
+    print(height)
+    print(temperature)
 
-except KeyboardInterrupt:
-    pass
-finally:
-    GPIO.cleanup()
+    sms_message = f"Thanks for giving time for you health, Here's your Report:\n Height: {height} cm\nWeight: {weight} kg\nBMI: {bmi:.2f}\nPulse: {pulse.heart_rate} bpm\nOxygen Level: {pulse.spo2}%cm\nTemperature: {temperature:.2f} °C"
+
+    send_sms(phone_number, sms_message)
+    beep()
+    collect_api(phone_number, height, temperature)
+    beep()
+    lcd.clear()
+
+
+while True:
+    lcd.putstr("Enter Number: ")
+    phone_number = input("Enter your 10-digit mobile number (or 'exit' to end):")
+    lcd.clear()
+
+    if phone_number.lower() == "exit":
+        break
+    if len(phone_number) == 10 and phone_number.isdigit():
+        print("Thank you! You can now proceed inside the model.")
+        lcd.putstr(phone_number + "      You May Proceed")
+        collect_and_send_sms(phone_number)
+        print("Thank you! Your report is ready and is sent to your phone number.")
+
+    else:
+        lcd.clear()
+        lcd.putstr("Invalid Number")
+        print("Invalid phone number. Please enter a 10-digit numeric phone number.")
+        time.sleep(1.5)
+
+        lcd.clear()
+
+
+GPIO.cleanup()
