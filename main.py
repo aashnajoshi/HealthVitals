@@ -18,9 +18,7 @@ LM35_PIN = 18
 BUZZER_PIN = 8
 
 lcd = I2cLcd(1, I2C_ADDR, I2C_NUM_ROWS, I2C_NUM_COLS)
-ser_gsm = serial.Serial(
-    "/dev/serial0", 9600, timeout=1
-)  # GSM module (replace correct port)
+ser_gsm = serial.Serial("/dev/serial0", 9600, timeout=1)
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(TRIG_PIN, GPIO.OUT)
 GPIO.setup(ECHO_PIN, GPIO.IN)
@@ -30,7 +28,6 @@ def beep():
     GPIO.output(BUZZER_PIN, GPIO.HIGH)
     time.sleep(0.5)
     GPIO.output(BUZZER_PIN, GPIO.LOW)
-
 
 def measure_height():
     GPIO.output(TRIG_PIN, True)
@@ -51,11 +48,37 @@ def measure_height():
     beep()
     return height
 
+def measure_bend():
+    GPIO.output(trigPin, GPIO.LOW)
+    time.sleep(0.2)  # Allow sensor to settle
+    GPIO.output(trigPin, GPIO.HIGH)
+    time.sleep(0.00001)
+    GPIO.output(trigPin, GPIO.LOW)    
+    while GPIO.input(echoPin) == GPIO.LOW:
+        pulse_start = time.time()      
+    while GPIO.input(echoPin) == GPIO.HIGH:
+        pulse_end = time.time()
+        
+    pulse_duration = pulse_end - pulse_start
+    distance = pulse_duration * 17150  
+    return distance
 
 def measure_weight():
+    k = 30.225
+    weight = [0]*5
+    # Measure distance and calculate weight
+    for i in range(5):
+        distance = measure_bend()
+        print("distance :", distance)
+        spring_compresion = k * (12.38 - distance)
+        weight[i] = spring_compresion +4  
+    # Sort weights and calculate average of top 3
+    weight.sort(reverse=True)
+    average_weight = sum(weight[:]) / 5
+    print("final weight :-->", average_weight)
+    weight=average_weight
     beep()
-    return 0
-
+    return weight
 
 def read_pulse_oximeter():
     mx30.enable_spo2()
@@ -72,7 +95,6 @@ def read_pulse_oximeter():
         print("Stress Level: {}".format(stress_level))
         time.sleep(1)
 
-
 def stress_level(pulse_threshold, o2_threshold):
     if mx30.ir <= pulse_threshold and mx30.red >= o2_threshold:
         stress_level = "Normal"
@@ -81,15 +103,13 @@ def stress_level(pulse_threshold, o2_threshold):
     else:
         stress_level = "Moderate"
 
-
 def measure_temperature():
-    # LM35 sensor returns analog voltage proportional to temperature
+    # LM35 sensor gives analog voltage proportional to temperature
     GPIO.setup(LM35_PIN, GPIO.IN)
     analog_value = GPIO.input(LM35_PIN)
-    temperature = (analog_value / 1024.0) * 3300 / 10  # LM35 scaling formula
+    temperature = (analog_value / 1024.0) * 3300 / 10 # LM35 scaling formula
     beep()
     return temperature
-
 
 def send_sms(phone_number, message):
     ser = ser_gsm
@@ -101,7 +121,6 @@ def send_sms(phone_number, message):
     ser.write(message.encode() + b"\x1A")
     time.sleep(1)
     ser.close()
-
 
 def collect_api(phone_number, height, weight, pulse, o2, temperature):
     SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -116,11 +135,7 @@ def collect_api(phone_number, height, weight, pulse, o2, temperature):
     service = build("sheets", "v4", credentials=creds)
     # Call for Sheets API
     sheet = service.spreadsheets()
-    result = (
-        sheet.values()
-        .get(spreadsheetId=SAMPLE_SPREADSHEET_ID, range=SAMPLE_RANGE_NAME)
-        .execute()
-    )
+    result = (sheet.values().get(spreadsheetId=SAMPLE_SPREADSHEET_ID, range=SAMPLE_RANGE_NAME).execute())
     values = result.get("values", [])
     phone_number = "{0}".format(phone_number)
     height = "{0}".format(height)
@@ -132,18 +147,7 @@ def collect_api(phone_number, height, weight, pulse, o2, temperature):
     sms_values.append(api_sms)
     print(sms_values)
 
-    request = (
-        service.spreadsheets()
-        .values()
-        .append(
-            spreadsheetId=SAMPLE_SPREADSHEET_ID,
-            range="Sheet2!A3",
-            valueInputOption="USER_ENTERED",
-            body={"values": sms_values},
-        )
-        .execute()
-    )
-
+    request = (service.spreadsheets().values().append(spreadsheetId=SAMPLE_SPREADSHEET_ID,range="Sheet2!A3",valueInputOption="USER_ENTERED",body={"values": sms_values},).execute())
 
 def collect_and_send_sms(phone_number):
     phone_number = phone_number
@@ -165,7 +169,6 @@ def collect_and_send_sms(phone_number):
     beep()
     lcd.clear()
 
-
 while True:
     lcd.putstr("Enter Number: ")
     phone_number = input("Enter your 10-digit mobile number (or 'exit' to end):")
@@ -178,7 +181,6 @@ while True:
         lcd.putstr(phone_number + "      You May Proceed")
         collect_and_send_sms(phone_number)
         print("Thank you! Your report is ready and is sent to your phone number.")
-
     else:
         lcd.clear()
         lcd.putstr("Invalid Number")
