@@ -1,7 +1,4 @@
-serial
-RPi.GPIO
-google-api-python-client
-google-auth
-google-auth-oauthlib
-google-auth-httplib2
-max30100
+google-api-python-client==2.77.0
+google-auth==2.22.0
+RPi.GPIO==0.7.0
+max30100==1.0.0
