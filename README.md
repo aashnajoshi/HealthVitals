@@ -1,5 +1,5 @@
 # HealthVitals
-A Python-based system to monitor and analyze health vitals like heart rate and temperature, generating alerts for abnormal readings.
+A Raspberry-pi-based system to monitor and analyze health vitals like heart rate and temperature, generating alerts for abnormal readings.
 
 ## Features
 - Monitors and records health vitals.
